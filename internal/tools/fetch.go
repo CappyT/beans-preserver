@@ -15,7 +15,10 @@ type FetchInput struct {
 	MaxBytes int64  `json:"max_bytes,omitempty" jsonschema:"cap on raw bytes to download (default 1 MiB)"`
 }
 
-func (r *Runner) Fetch(ctx context.Context, in FetchInput) (*Result, error) {
+func (r *Runner) Fetch(ctx context.Context, in FetchInput, prog ProgressFn) (*Result, error) {
+	if prog != nil {
+		prog(ctx, 0, 0, "fetching "+in.URL)
+	}
 	body, ctype, err := fetch.Get(ctx, in.URL, in.MaxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", in.URL, err)
@@ -26,11 +29,15 @@ func (r *Runner) Fetch(ctx context.Context, in FetchInput) (*Result, error) {
 	} else {
 		text = string(body)
 	}
+	if prog != nil {
+		prog(ctx, 0, 0, fmt.Sprintf("got %d bytes, extracting…", len(text)))
+	}
 	return r.generate(
 		ctx,
 		"fetch",
 		[]string{in.URL, in.Query, text},
 		func(string) string { return prompts.Fetch(in.URL, in.Query, text) },
 		tokenize.Estimate(text),
+		prog,
 	)
 }

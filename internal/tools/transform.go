@@ -13,12 +13,13 @@ type TransformInput struct {
 	Input string `json:"input" jsonschema:"the content to transform"`
 }
 
-func (r *Runner) Transform(ctx context.Context, in TransformInput) (*Result, error) {
+func (r *Runner) Transform(ctx context.Context, in TransformInput, prog ProgressFn) (*Result, error) {
 	return r.generate(
 		ctx,
 		"transform",
 		[]string{in.From, in.To, in.Input},
 		func(string) string { return prompts.Transform(in.From, in.To, in.Input) },
 		tokenize.Estimate(in.Input),
+		prog,
 	)
 }

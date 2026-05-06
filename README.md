@@ -99,9 +99,13 @@ one `mcp.AddTool` in `cmd/server/main.go`.
 
 ## Status
 
-v0.1: 6 tools shipped, integration smoke + unit tests passing.
-v0.2 backlog: PostToolUse hook for auto Bash compression, streaming progress
-notifications, optional non-Ollama backends.
+- **v0.1** — 6 tools shipped, integration smoke + unit tests passing.
+- **v0.2** — streaming + MCP progress notifications: tier-2 calls now emit
+  intermediate progress messages so Claude doesn't see a 30 s stall.
+- **Dropped from roadmap**: PostToolUse hook for Bash compression
+  (Claude Code's hook API only allows augmenting context, not replacing tool
+  output — a wrapper would *increase* tokens, not save them); LLM-aided
+  `repo_index` v2 (cost > value vs. on-demand `local_summarize`).
 
 ## License
 

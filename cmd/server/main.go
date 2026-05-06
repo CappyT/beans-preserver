@@ -17,7 +17,7 @@ import (
 	"github.com/CappyT/beans-preserver/internal/tools"
 )
 
-const version = "v0.1.0"
+const version = "v0.2.0"
 
 func main() {
 	configPath := flag.String("config", "configs/default.yaml", "path to YAML config")
@@ -85,10 +85,12 @@ func main() {
 	}
 }
 
-// wrap adapts a typed Runner method (in -> *Result) into the SDK's tool handler shape.
-func wrap[I any](fn func(context.Context, I) (*tools.Result, error)) func(context.Context, *mcp.CallToolRequest, I) (*mcp.CallToolResult, tools.Result, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, in I) (*mcp.CallToolResult, tools.Result, error) {
-		out, err := fn(ctx, in)
+// wrap adapts a typed Runner method (in, prog -> *Result) into the SDK's tool
+// handler shape, threading the request's progress token through to the runner.
+func wrap[I any](fn func(context.Context, I, tools.ProgressFn) (*tools.Result, error)) func(context.Context, *mcp.CallToolRequest, I) (*mcp.CallToolResult, tools.Result, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in I) (*mcp.CallToolResult, tools.Result, error) {
+		prog := buildProgressFn(req)
+		out, err := fn(ctx, in, prog)
 		if err != nil {
 			return nil, tools.Result{}, err
 		}
@@ -100,7 +102,7 @@ func wrap[I any](fn func(context.Context, I) (*tools.Result, error)) func(contex
 }
 
 // wrapPlain is the same as wrap but for tools whose output type isn't tools.Result
-// (deterministic tools that bypass the LLM runner).
+// (deterministic tools that bypass the LLM runner and never need progress).
 func wrapPlain[I any, O any](fn func(context.Context, I) (*O, error)) func(context.Context, *mcp.CallToolRequest, I) (*mcp.CallToolResult, O, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in I) (*mcp.CallToolResult, O, error) {
 		out, err := fn(ctx, in)
@@ -112,5 +114,25 @@ func wrapPlain[I any, O any](fn func(context.Context, I) (*O, error)) func(conte
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: string(j)}},
 		}, *out, nil
+	}
+}
+
+// buildProgressFn returns a runner ProgressFn that emits MCP progress
+// notifications, or nil if the client didn't supply a progress token.
+func buildProgressFn(req *mcp.CallToolRequest) tools.ProgressFn {
+	if req == nil || req.Params == nil {
+		return nil
+	}
+	token := req.Params.GetProgressToken()
+	if token == nil {
+		return nil
+	}
+	return func(ctx context.Context, progress, total float64, message string) {
+		_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
+			ProgressToken: token,
+			Progress:      progress,
+			Total:         total,
+			Message:       message,
+		})
 	}
 }

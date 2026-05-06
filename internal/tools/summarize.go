@@ -12,12 +12,13 @@ type SummarizeInput struct {
 	Content string `json:"content" jsonschema:"the text to summarize"`
 }
 
-func (r *Runner) Summarize(ctx context.Context, in SummarizeInput) (*Result, error) {
+func (r *Runner) Summarize(ctx context.Context, in SummarizeInput, prog ProgressFn) (*Result, error) {
 	return r.generate(
 		ctx,
 		"summarize",
 		[]string{in.Focus, in.Content},
 		func(string) string { return prompts.Summarize(in.Focus, in.Content) },
 		tokenize.Estimate(in.Content),
+		prog,
 	)
 }

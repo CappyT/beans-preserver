@@ -12,12 +12,13 @@ type ExtractInput struct {
 	Source string `json:"source" jsonschema:"the raw text to extract from"`
 }
 
-func (r *Runner) Extract(ctx context.Context, in ExtractInput) (*Result, error) {
+func (r *Runner) Extract(ctx context.Context, in ExtractInput, prog ProgressFn) (*Result, error) {
 	return r.generate(
 		ctx,
 		"extract",
 		[]string{in.Query, in.Source},
 		func(string) string { return prompts.Extract(in.Query, in.Source) },
 		tokenize.Estimate(in.Source),
+		prog,
 	)
 }

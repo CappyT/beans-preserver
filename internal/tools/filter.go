@@ -12,12 +12,13 @@ type FilterInput struct {
 	Content   string `json:"content" jsonschema:"the raw text to filter"`
 }
 
-func (r *Runner) Filter(ctx context.Context, in FilterInput) (*Result, error) {
+func (r *Runner) Filter(ctx context.Context, in FilterInput, prog ProgressFn) (*Result, error) {
 	return r.generate(
 		ctx,
 		"filter",
 		[]string{in.Criterion, in.Content},
-		func(model string) string { return prompts.Filter(in.Criterion, in.Content) },
+		func(string) string { return prompts.Filter(in.Criterion, in.Content) },
 		tokenize.Estimate(in.Content),
+		prog,
 	)
 }
