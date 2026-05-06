@@ -60,6 +60,11 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	c.Cache.Path = expandHome(c.Cache.Path)
+	// OLLAMA_BASE_URL overrides the YAML, so the same checked-in config can
+	// drive any host without per-machine edits.
+	if v := os.Getenv("OLLAMA_BASE_URL"); v != "" {
+		c.Ollama.BaseURL = v
+	}
 	return &c, nil
 }
 

@@ -1,5 +1,6 @@
 ollama:
-  base_url: http://your-ollama-host:11434
+  # Override at runtime with the OLLAMA_BASE_URL env var.
+  base_url: http://localhost:11434
   request_timeout: 600s
 
 # Tier → model mapping. Tools pick a tier; cluster tuning lives here.

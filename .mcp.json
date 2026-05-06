@@ -3,7 +3,10 @@
     "beans-preserver": {
       "type": "stdio",
       "command": "./bin/beans-preserver",
-      "args": ["--config", "configs/default.yaml"]
+      "args": ["--config", "configs/default.yaml"],
+      "env": {
+        "OLLAMA_BASE_URL": "http://your-ollama-host:11434"
+      }
     }
   }
 }
