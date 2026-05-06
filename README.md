@@ -25,6 +25,7 @@ otherwise burn thousands of tokens.
 | `local_transform`   | Mechanical format conversion (JSON↔YAML, etc)   | 1      |
 | `local_fetch`       | HTTP fetch + HTML strip + targeted extraction   | 2      |
 | `local_repo_index`  | Fast deterministic walk of a repo (no LLM call) | n/a    |
+| `local_stats`       | Inspect call counts, cache hit rate, net Claude tokens saved | n/a |
 
 Tier 1 → fast small model (default `gemma4:e2b`, ~12 s on 6 KB input).
 Tier 2 → larger model (default `gemma4:26b`, ~30 s; cached aggressively).
@@ -102,6 +103,14 @@ one `mcp.AddTool` in `cmd/server/main.go`.
 - **v0.1** — 6 tools shipped, integration smoke + unit tests passing.
 - **v0.2** — streaming + MCP progress notifications: tier-2 calls now emit
   intermediate progress messages so Claude doesn't see a 30 s stall.
+- **v0.3** — startup health check (verify Ollama + every configured model),
+  `local_stats` tool with persisted per-tool counters and net-tokens-saved
+  separated between server-fetched (real win) and inline-content (no win)
+  invocations.
+- **Known limitation surfaced by stats**: inline-content tools (filter, extract,
+  summarize, transform) don't actually save Claude tokens — Claude pays the
+  content as call arg *and* the response. v0.4 candidate: add `path:` parameters
+  so the server can read content itself, turning every tool into a server-fetch.
 - **Dropped from roadmap**: PostToolUse hook for Bash compression
   (Claude Code's hook API only allows augmenting context, not replacing tool
   output — a wrapper would *increase* tokens, not save them); LLM-aided

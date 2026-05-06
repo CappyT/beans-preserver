@@ -38,6 +38,7 @@ func (r *Runner) Fetch(ctx context.Context, in FetchInput, prog ProgressFn) (*Re
 		[]string{in.URL, in.Query, text},
 		func(string) string { return prompts.Fetch(in.URL, in.Query, text) },
 		tokenize.Estimate(text),
+		true, // tool retrieved content from URL — real Claude-token savings
 		prog,
 	)
 }

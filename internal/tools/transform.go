@@ -20,6 +20,7 @@ func (r *Runner) Transform(ctx context.Context, in TransformInput, prog Progress
 		[]string{in.From, in.To, in.Input},
 		func(string) string { return prompts.Transform(in.From, in.To, in.Input) },
 		tokenize.Estimate(in.Input),
+		false,
 		prog,
 	)
 }

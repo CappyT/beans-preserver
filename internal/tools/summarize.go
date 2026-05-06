@@ -19,6 +19,7 @@ func (r *Runner) Summarize(ctx context.Context, in SummarizeInput, prog Progress
 		[]string{in.Focus, in.Content},
 		func(string) string { return prompts.Summarize(in.Focus, in.Content) },
 		tokenize.Estimate(in.Content),
+		false,
 		prog,
 	)
 }

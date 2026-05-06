@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -36,9 +39,23 @@ func main() {
 	}
 	defer cch.Close()
 
+	ollamaClient := ollama.New(cfg.Ollama.BaseURL, cfg.Ollama.RequestTimeout)
+
+	// Verify Ollama is reachable and the configured models are present *before*
+	// we accept any tool calls. Failing fast here gives a clear error instead of
+	// a cryptic timeout the first time Claude tries to use a tool.
+	{
+		boot, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := healthCheck(boot, ollamaClient, cfg); err != nil {
+			cancel()
+			log.Fatalf("health check failed: %v", err)
+		}
+		cancel()
+	}
+
 	runner := &tools.Runner{
 		Cfg:    cfg,
-		Ollama: ollama.New(cfg.Ollama.BaseURL, cfg.Ollama.RequestTimeout),
+		Ollama: ollamaClient,
 		Cache:  cch,
 	}
 
@@ -76,6 +93,11 @@ func main() {
 		Name:        "local_repo_index",
 		Description: "Fast deterministic walk of a repository — returns paths, sizes and classified kinds. Use to map an unfamiliar repo before deciding which files to Read. No LLM call, no token cost.",
 	}, wrapPlain(runner.RepoIndex))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "local_stats",
+		Description: "Inspect the runtime: per-tool call counts, cache hit rate, latency, ollama tokens consumed, and net Claude tokens saved (vs wasted on inline-content calls). Pass reset:true to zero counters.",
+	}, wrapPlain(runner.Stats))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -115,6 +137,54 @@ func wrapPlain[I any, O any](fn func(context.Context, I) (*O, error)) func(conte
 			Content: []mcp.Content{&mcp.TextContent{Text: string(j)}},
 		}, *out, nil
 	}
+}
+
+// healthCheck verifies Ollama is reachable and every model referenced by a
+// tier exists locally on the server. The fallback model is best-effort: a
+// missing fallback only logs a warning since the primary tier may still work.
+func healthCheck(ctx context.Context, c *ollama.Client, cfg *config.Config) error {
+	v, err := c.ServerVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("can't reach ollama at %s: %w", cfg.Ollama.BaseURL, err)
+	}
+	log.Printf("ollama %s reachable at %s", v.Version, cfg.Ollama.BaseURL)
+
+	required := map[string]bool{}
+	for name, tier := range cfg.Tiers {
+		if name == "fallback" {
+			continue
+		}
+		if tier.Model != "" {
+			required[tier.Model] = true
+		}
+	}
+	var missing []string
+	checked := make([]string, 0, len(required))
+	for m := range required {
+		ok, err := c.HasModel(ctx, m)
+		if err != nil {
+			return fmt.Errorf("checking model %s: %w", m, err)
+		}
+		if !ok {
+			missing = append(missing, m)
+			continue
+		}
+		checked = append(checked, m)
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("models not present on ollama (run `ollama pull <name>`): %v", missing)
+	}
+	if fb, ok := cfg.Fallback(); ok && fb.Model != "" {
+		if has, _ := c.HasModel(ctx, fb.Model); !has {
+			log.Printf("warning: fallback model %q not present on ollama (fallback disabled)", fb.Model)
+		} else {
+			checked = append(checked, fb.Model)
+		}
+	}
+	sort.Strings(checked)
+	log.Printf("verified %d models: %v", len(checked), checked)
+	return nil
 }
 
 // buildProgressFn returns a runner ProgressFn that emits MCP progress

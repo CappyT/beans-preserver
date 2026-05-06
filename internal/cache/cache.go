@@ -42,7 +42,12 @@ func Open(path string, maxEntries int) (*Cache, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Cache{db: db, maxEntries: maxEntries}, nil
+	c := &Cache{db: db, maxEntries: maxEntries}
+	if err := c.initStats(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return c, nil
 }
 
 func (c *Cache) Close() error { return c.db.Close() }

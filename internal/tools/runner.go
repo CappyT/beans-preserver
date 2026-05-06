@@ -32,6 +32,10 @@ type Result struct {
 	WallMs           int64   `json:"wall_ms,omitempty"`
 	RawAvailable     bool    `json:"raw_available"`
 	RawTokenEstimate int     `json:"raw_token_estimate,omitempty"`
+	// ServerFetched is true when the tool retrieved content itself (URL,
+	// path) rather than receiving it as a call argument. Only server-fetched
+	// calls produce real Claude-token savings — see the local_stats tool.
+	ServerFetched bool `json:"server_fetched"`
 }
 
 // ProgressFn is an optional callback the runner invokes to surface progress to
@@ -70,17 +74,41 @@ func (p *progressEmitter) note(ctx context.Context, msg string) {
 // generate runs an Ollama call for the given tool, with cache + tier resolution.
 // promptBuilder takes the resolved model name and returns the final prompt text.
 // cacheParts are the inputs that uniquely identify the request for cache keying.
+// serverFetched is recorded on the cached Result and surfaced in stats to mark
+// real Claude-token savings vs no-savings inline-content calls.
 func (r *Runner) generate(
 	ctx context.Context,
 	tool string,
 	cacheParts []string,
 	promptBuilder func(model string) string,
 	rawTokenEstimate int,
+	serverFetched bool,
 	prog ProgressFn,
-) (*Result, error) {
-	tier, ttl, err := r.Cfg.ResolveTool(tool)
-	if err != nil {
-		return nil, err
+) (res *Result, err error) {
+	tStart := time.Now()
+	defer func() {
+		if r.Cache == nil {
+			return
+		}
+		ev := cache.StatEvent{
+			Tool:          tool,
+			ServerFetched: serverFetched,
+			WallMs:        time.Since(tStart).Milliseconds(),
+			RawEstimate:   rawTokenEstimate,
+			Failed:        err != nil,
+		}
+		if res != nil {
+			ev.CacheHit = res.CacheHit
+			ev.InputTokens = res.InputTokens
+			ev.OutputTokens = res.OutputTokens
+		}
+		_ = r.Cache.RecordCall(ev)
+	}()
+
+	tier, ttl, terr := r.Cfg.ResolveTool(tool)
+	if terr != nil {
+		err = terr
+		return
 	}
 	prompt := promptBuilder(tier.Model)
 
@@ -89,30 +117,31 @@ func (r *Runner) generate(
 		var cached Result
 		if json.Unmarshal(v, &cached) == nil {
 			cached.CacheHit = true
-			return &cached, nil
+			res = &cached
+			return
 		}
 	}
 
 	emitter := &progressEmitter{fn: prog, minPeriod: 250 * time.Millisecond}
 	emitter.note(ctx, fmt.Sprintf("calling %s", tier.Model))
 
-	out, err := r.callTier(ctx, tier, prompt, emitter)
-	if err != nil {
-		// Try fallback once.
+	out, gerr := r.callTier(ctx, tier, prompt, emitter)
+	if gerr != nil {
 		if fb, ok := r.Cfg.Fallback(); ok && fb.Model != tier.Model {
 			emitter.note(ctx, fmt.Sprintf("falling back to %s", fb.Model))
-			out, err = r.callTier(ctx, fb, prompt, emitter)
-			if err == nil {
+			out, gerr = r.callTier(ctx, fb, prompt, emitter)
+			if gerr == nil {
 				tier = fb
 			}
 		}
-		if err != nil {
-			return nil, err
+		if gerr != nil {
+			err = gerr
+			return
 		}
 	}
 
 	body, meta := splitMeta(out.Response)
-	res := &Result{
+	res = &Result{
 		Result:           body,
 		Confidence:       meta.Confidence,
 		Notes:            meta.Notes,
@@ -122,11 +151,12 @@ func (r *Runner) generate(
 		WallMs:           out.TotalDurationNs / 1e6,
 		RawAvailable:     true,
 		RawTokenEstimate: rawTokenEstimate,
+		ServerFetched:    serverFetched,
 	}
-	if data, err := json.Marshal(res); err == nil {
+	if data, mErr := json.Marshal(res); mErr == nil {
 		_ = r.Cache.Put(key, data, ttl)
 	}
-	return res, nil
+	return
 }
 
 func (r *Runner) callTier(ctx context.Context, tier config.Tier, prompt string, emitter *progressEmitter) (*ollama.GenerateResponse, error) {

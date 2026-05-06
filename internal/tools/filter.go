@@ -19,6 +19,7 @@ func (r *Runner) Filter(ctx context.Context, in FilterInput, prog ProgressFn) (*
 		[]string{in.Criterion, in.Content},
 		func(string) string { return prompts.Filter(in.Criterion, in.Content) },
 		tokenize.Estimate(in.Content),
+		false, // content provided inline by Claude — no real token saving
 		prog,
 	)
 }

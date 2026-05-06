@@ -5,6 +5,9 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/CappyT/beans-preserver/internal/cache"
 )
 
 // RepoIndexInput maps Claude's parameters into a directory walk.
@@ -76,7 +79,20 @@ func classify(path string) string {
 	return "other"
 }
 
-func (r *Runner) RepoIndex(_ context.Context, in RepoIndexInput) (*RepoIndex, error) {
+func (r *Runner) RepoIndex(_ context.Context, in RepoIndexInput) (out *RepoIndex, err error) {
+	tStart := time.Now()
+	defer func() {
+		if r.Cache == nil {
+			return
+		}
+		_ = r.Cache.RecordCall(cache.StatEvent{
+			Tool:          "repo_index",
+			ServerFetched: true,
+			WallMs:        time.Since(tStart).Milliseconds(),
+			Failed:        err != nil,
+		})
+	}()
+
 	root := in.Path
 	if root == "" {
 		root = "."
@@ -86,13 +102,13 @@ func (r *Runner) RepoIndex(_ context.Context, in RepoIndexInput) (*RepoIndex, er
 		max = 2000
 	}
 
-	out := &RepoIndex{
+	out = &RepoIndex{
 		Root:  root,
 		Files: make([]RepoFile, 0, 256),
 		Stats: map[string]int{},
 	}
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
@@ -125,5 +141,5 @@ func (r *Runner) RepoIndex(_ context.Context, in RepoIndexInput) (*RepoIndex, er
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	return out, nil //nolint:nakedret // err is set via the named return
 }

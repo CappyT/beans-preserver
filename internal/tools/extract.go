@@ -19,6 +19,7 @@ func (r *Runner) Extract(ctx context.Context, in ExtractInput, prog ProgressFn) 
 		[]string{in.Query, in.Source},
 		func(string) string { return prompts.Extract(in.Query, in.Source) },
 		tokenize.Estimate(in.Source),
+		false,
 		prog,
 	)
 }
