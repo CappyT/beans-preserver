@@ -1,8 +1,10 @@
 # beans-preserver — token-saving MCP
 
 Local-LLM MCP server that offloads token-heavy preprocessing (filtering, extraction,
-summarization, web fetch) to an Ollama endpoint (configurable via the
-`OLLAMA_BASE_URL` env var, defaults to `http://localhost:11434`).
+summarization, web fetch) to a configurable LLM provider — Ollama natively or any
+OpenAI-compatible endpoint (real OpenAI, OpenRouter, vLLM, llama.cpp server, etc).
+Provider URLs are picked up from `OLLAMA_BASE_URL`, `OPENAI_BASE_URL`,
+`OPENAI_API_KEY` env vars; defaults target Ollama at `http://localhost:11434`.
 
 ## When to delegate to local tools
 
@@ -27,15 +29,21 @@ Every tool returns:
   "result": "...",
   "confidence": 0.0-1.0,
   "notes": "one-line note from the model",
+  "provider": "ollama",
   "model": "gemma4:e2b",
   "cache_hit": true|false,
   "input_tokens": 0,
   "output_tokens": 0,
   "wall_ms": 0,
   "raw_available": true,
-  "raw_token_estimate": 0
+  "raw_token_estimate": 0,
+  "server_fetched": true|false
 }
 ```
+
+`provider` is the name of the configured endpoint that served the call (set in
+`configs/default.yaml` under `providers:`); cache keys include it so the same
+model name on different endpoints never collides.
 
 **Trust policy:**
 

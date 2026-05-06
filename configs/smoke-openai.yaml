@@ -1,0 +1,49 @@
+# Smoke profile: route everything through Ollama's OpenAI-compatible /v1
+# endpoint to exercise the openai provider. Not for real use — keep as a
+# regression test for the openai provider against a known-good local backend.
+providers:
+  ollama-via-v1:
+    type: openai
+    # OPENAI_BASE_URL overrides this. Default points at your local Ollama
+    # /v1 surface; set the env to https://api.openai.com/v1 to test against
+    # real OpenAI (provided OPENAI_API_KEY is also set).
+    base_url: http://localhost:11434/v1
+    api_key: ""
+    request_timeout: 600s
+
+default_provider: ollama-via-v1
+
+tiers:
+  "1":
+    model: gemma4:e2b
+    options:
+      temperature: 0.1
+      num_predict: 800
+  "2":
+    model: gemma4:e2b   # keep tier 2 small for smoke speed
+    options:
+      temperature: 0.1
+      num_predict: 800
+  fallback:
+    model: gemma4:e2b
+    options:
+      temperature: 0.1
+      num_predict: 800
+
+cache:
+  path: ~/.cache/beans-preserver/smoke-cache.db
+  max_entries: 500
+  default_ttl: 0s
+
+tools:
+  filter:
+    tier: "1"
+  extract:
+    tier: "1"
+  summarize:
+    tier: "1"
+  transform:
+    tier: "1"
+  fetch:
+    tier: "2"
+    cache_ttl: 86400s

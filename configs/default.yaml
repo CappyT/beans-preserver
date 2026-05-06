@@ -1,16 +1,38 @@
-ollama:
-  # Override at runtime with the OLLAMA_BASE_URL env var.
-  base_url: http://localhost:11434
-  request_timeout: 600s
+# Providers — the LLM endpoints beans-preserver can call. Each tier picks one
+# (or inherits default_provider). Add as many as you like.
+providers:
+  ollama:
+    type: ollama
+    # OLLAMA_BASE_URL env var overrides this at runtime, so the same
+    # checked-in config can drive any host without per-machine edits.
+    base_url: http://localhost:11434
+    request_timeout: 600s
+
+  # Example: any OpenAI-compatible endpoint — real OpenAI, OpenRouter, vLLM,
+  # llama.cpp server, even Ollama's own /v1 surface. Uncomment to enable.
+  #
+  # openai:
+  #   type: openai
+  #   # OPENAI_BASE_URL overrides; trailing /v1 is conventional.
+  #   base_url: https://api.openai.com/v1
+  #   # OPENAI_API_KEY overrides; leave blank for endpoints without auth
+  #   # (e.g. local llama.cpp server, Ollama in /v1 mode).
+  #   api_key: ""
+  #   request_timeout: 600s
+
+# Default provider for tiers that don't specify one.
+default_provider: ollama
 
 # Tier → model mapping. Tools pick a tier; cluster tuning lives here.
+# Add `provider: openai` to a tier to route only that tier through a different
+# endpoint (e.g. local for tier 1, cloud for tier 2 when accuracy matters).
 tiers:
   "1":
     model: gemma4:e2b
     think: false
     options:
       temperature: 0.1
-      num_predict: 1500
+      num_predict: 1500       # Ollama name; OpenAI providers map this to max_tokens automatically
   "2":
     model: gemma4:26b
     think: false
@@ -26,7 +48,7 @@ tiers:
 cache:
   path: ~/.cache/beans-preserver/cache.db
   max_entries: 5000
-  default_ttl: 0s  # 0s = forever (invalidated by content hash)
+  default_ttl: 0s  # 0s = forever (invalidated by content hash + provider name)
 
 tools:
   filter:
@@ -44,9 +66,3 @@ tools:
   fetch:
     tier: "2"        # tier 2 — pages can be large + need accuracy
     cache_ttl: 86400s  # 24h: web content changes
-
-hook:
-  bash:
-    enabled: false  # disabled until we ship the hook binary
-    threshold_tokens: 8000
-    tier: 1

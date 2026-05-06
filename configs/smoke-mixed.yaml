@@ -1,0 +1,45 @@
+# Smoke profile: tier 1 native, tier 2 OpenAI-compat — verifies per-tier
+# provider override actually routes correctly.
+providers:
+  ollama-native:
+    type: ollama
+    base_url: http://localhost:11434
+    request_timeout: 600s
+  ollama-via-v1:
+    type: openai
+    base_url: http://localhost:11434/v1
+    api_key: ""
+    request_timeout: 600s
+
+default_provider: ollama-native
+
+tiers:
+  "1":
+    # No provider override — uses default_provider (ollama-native).
+    model: llama3:latest
+    options:
+      temperature: 0.1
+      num_predict: 600
+  "2":
+    provider: ollama-via-v1   # override: route this tier through openai-compat
+    model: llama3:latest
+    options:
+      temperature: 0.1
+      num_predict: 600
+
+cache:
+  path: ~/.cache/beans-preserver/smoke-mixed-cache.db
+  max_entries: 500
+
+tools:
+  filter:
+    tier: "1"     # via ollama-native
+  extract:
+    tier: "1"
+  summarize:
+    tier: "2"     # via ollama-via-v1 (openai-compat) — exercises the override
+  transform:
+    tier: "1"
+  fetch:
+    tier: "2"
+    cache_ttl: 86400s

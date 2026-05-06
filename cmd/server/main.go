@@ -16,11 +16,13 @@ import (
 
 	"github.com/CappyT/beans-preserver/internal/cache"
 	"github.com/CappyT/beans-preserver/internal/config"
-	"github.com/CappyT/beans-preserver/internal/ollama"
+	"github.com/CappyT/beans-preserver/internal/provider"
+	ollamaprov "github.com/CappyT/beans-preserver/internal/provider/ollama"
+	openaiprov "github.com/CappyT/beans-preserver/internal/provider/openai"
 	"github.com/CappyT/beans-preserver/internal/tools"
 )
 
-const version = "v0.2.0"
+const version = "v0.5.0"
 
 func main() {
 	configPath := flag.String("config", "configs/default.yaml", "path to YAML config")
@@ -39,14 +41,16 @@ func main() {
 	}
 	defer cch.Close()
 
-	ollamaClient := ollama.New(cfg.Ollama.BaseURL, cfg.Ollama.RequestTimeout)
+	providers, err := buildProviders(cfg)
+	if err != nil {
+		log.Fatalf("build providers: %v", err)
+	}
 
-	// Verify Ollama is reachable and the configured models are present *before*
-	// we accept any tool calls. Failing fast here gives a clear error instead of
-	// a cryptic timeout the first time Claude tries to use a tool.
+	// Verify every configured provider is reachable and the models its tiers
+	// reference are actually available *before* we accept any tool calls.
 	{
-		boot, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := healthCheck(boot, ollamaClient, cfg); err != nil {
+		boot, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := healthCheck(boot, providers, cfg); err != nil {
 			cancel()
 			log.Fatalf("health check failed: %v", err)
 		}
@@ -54,9 +58,9 @@ func main() {
 	}
 
 	runner := &tools.Runner{
-		Cfg:    cfg,
-		Ollama: ollamaClient,
-		Cache:  cch,
+		Cfg:       cfg,
+		Providers: providers,
+		Cache:     cch,
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{
@@ -107,6 +111,26 @@ func main() {
 	}
 }
 
+// buildProviders instantiates a provider for each entry in cfg.Providers.
+// Unknown types are a fatal misconfiguration.
+func buildProviders(cfg *config.Config) (map[string]provider.Provider, error) {
+	out := make(map[string]provider.Provider, len(cfg.Providers))
+	for name, pcfg := range cfg.Providers {
+		if pcfg.BaseURL == "" {
+			return nil, fmt.Errorf("provider %q: base_url is empty (set it in config or via env)", name)
+		}
+		switch pcfg.Type {
+		case "ollama":
+			out[name] = ollamaprov.New(pcfg.BaseURL, pcfg.RequestTimeout)
+		case "openai":
+			out[name] = openaiprov.New(pcfg.BaseURL, pcfg.APIKey, pcfg.RequestTimeout)
+		default:
+			return nil, fmt.Errorf("provider %q: unknown type %q (must be 'ollama' or 'openai')", name, pcfg.Type)
+		}
+	}
+	return out, nil
+}
+
 // wrap adapts a typed Runner method (in, prog -> *Result) into the SDK's tool
 // handler shape, threading the request's progress token through to the runner.
 func wrap[I any](fn func(context.Context, I, tools.ProgressFn) (*tools.Result, error)) func(context.Context, *mcp.CallToolRequest, I) (*mcp.CallToolResult, tools.Result, error) {
@@ -139,51 +163,96 @@ func wrapPlain[I any, O any](fn func(context.Context, I) (*O, error)) func(conte
 	}
 }
 
-// healthCheck verifies Ollama is reachable and every model referenced by a
-// tier exists locally on the server. The fallback model is best-effort: a
-// missing fallback only logs a warning since the primary tier may still work.
-func healthCheck(ctx context.Context, c *ollama.Client, cfg *config.Config) error {
-	v, err := c.ServerVersion(ctx)
-	if err != nil {
-		return fmt.Errorf("can't reach ollama at %s: %w", cfg.Ollama.BaseURL, err)
+// healthCheck verifies every configured provider is reachable, then verifies
+// each model referenced by a non-fallback tier exists on its provider. The
+// fallback model is best-effort — a missing fallback only logs a warning.
+//
+// For OpenAI-compat providers that don't expose /models, HasModel returns
+// (true, nil) optimistically and we log an info note rather than failing.
+func healthCheck(ctx context.Context, providers map[string]provider.Provider, cfg *config.Config) error {
+	// Stable provider order in logs.
+	pnames := make([]string, 0, len(providers))
+	for name := range providers {
+		pnames = append(pnames, name)
 	}
-	log.Printf("ollama %s reachable at %s", v.Version, cfg.Ollama.BaseURL)
+	sort.Strings(pnames)
 
-	required := map[string]bool{}
-	for name, tier := range cfg.Tiers {
-		if name == "fallback" {
-			continue
-		}
-		if tier.Model != "" {
-			required[tier.Model] = true
-		}
-	}
-	var missing []string
-	checked := make([]string, 0, len(required))
-	for m := range required {
-		ok, err := c.HasModel(ctx, m)
+	for _, name := range pnames {
+		p := providers[name]
+		pcfg := cfg.Providers[name]
+		msg, err := p.Hello(ctx)
 		if err != nil {
-			return fmt.Errorf("checking model %s: %w", m, err)
+			return fmt.Errorf("provider %q (%s) unreachable at %s: %w", name, pcfg.Type, pcfg.BaseURL, err)
 		}
-		if !ok {
-			missing = append(missing, m)
+		log.Printf("provider %q (%s @ %s): %s", name, pcfg.Type, pcfg.BaseURL, msg)
+	}
+
+	// Group required models by provider so we list each one at most once.
+	requiredByProvider := map[string]map[string]bool{}
+	addModel := func(pname, model string) {
+		if model == "" {
+			return
+		}
+		if requiredByProvider[pname] == nil {
+			requiredByProvider[pname] = map[string]bool{}
+		}
+		requiredByProvider[pname][model] = true
+	}
+	for tname, tier := range cfg.Tiers {
+		if tname == "fallback" {
 			continue
 		}
-		checked = append(checked, m)
+		_, pname, err := cfg.ResolveTier(tname)
+		if err != nil {
+			return err
+		}
+		addModel(pname, tier.Model)
+	}
+
+	var missing []string
+	var checked []string
+	pkeys := make([]string, 0, len(requiredByProvider))
+	for k := range requiredByProvider {
+		pkeys = append(pkeys, k)
+	}
+	sort.Strings(pkeys)
+	for _, pname := range pkeys {
+		p := providers[pname]
+		mkeys := make([]string, 0, len(requiredByProvider[pname]))
+		for m := range requiredByProvider[pname] {
+			mkeys = append(mkeys, m)
+		}
+		sort.Strings(mkeys)
+		for _, m := range mkeys {
+			ok, err := p.HasModel(ctx, m)
+			if err != nil {
+				log.Printf("warning: provider %q model check failed for %s: %v (continuing)", pname, m, err)
+				continue
+			}
+			if !ok {
+				missing = append(missing, fmt.Sprintf("%s/%s", pname, m))
+				continue
+			}
+			checked = append(checked, fmt.Sprintf("%s/%s", pname, m))
+		}
 	}
 	if len(missing) > 0 {
-		sort.Strings(missing)
-		return fmt.Errorf("models not present on ollama (run `ollama pull <name>`): %v", missing)
+		return fmt.Errorf("models not present (run `ollama pull <name>` or check the provider): %v", missing)
 	}
-	if fb, ok := cfg.Fallback(); ok && fb.Model != "" {
-		if has, _ := c.HasModel(ctx, fb.Model); !has {
-			log.Printf("warning: fallback model %q not present on ollama (fallback disabled)", fb.Model)
-		} else {
-			checked = append(checked, fb.Model)
+	log.Printf("verified %d models: %v", len(checked), checked)
+
+	if fbTier, fbName, ok := cfg.Fallback(); ok && fbTier.Model != "" {
+		p := providers[fbName]
+		has, herr := p.HasModel(ctx, fbTier.Model)
+		switch {
+		case herr != nil:
+			log.Printf("warning: fallback %q/%s check errored: %v (fallback may not work)", fbName, fbTier.Model, herr)
+		case !has:
+			log.Printf("warning: fallback %q/%s not present (fallback disabled)", fbName, fbTier.Model)
+		default:
+			log.Printf("verified fallback: %s/%s", fbName, fbTier.Model)
 		}
 	}
-	sort.Strings(checked)
-	log.Printf("verified %d models: %v", len(checked), checked)
 	return nil
 }
 
@@ -206,3 +275,4 @@ func buildProgressFn(req *mcp.CallToolRequest) tools.ProgressFn {
 		})
 	}
 }
+

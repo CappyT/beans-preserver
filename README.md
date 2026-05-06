@@ -5,7 +5,11 @@ summarize, transform, fetch, repo-index) to a local LLM so Claude only handles
 the parts that actually need it.
 
 Built around an Ollama instance running on a Jetson AGX, but works with any
-Ollama endpoint.
+Ollama endpoint — and, since v0.5, any OpenAI-compatible endpoint as well
+(real OpenAI, OpenRouter, vLLM, llama.cpp server, even Ollama's own `/v1`
+surface). You can also route different tiers through different providers:
+fast local model for hot-path tools, cloud frontier model for the ones where
+accuracy matters.
 
 ## Why
 
@@ -39,9 +43,13 @@ so Claude can fall back to reading raw content when the summary doesn't look rig
 ### 1. Prerequisites
 
 - **Go 1.25+** (the binary is built locally; no prebuilt releases yet).
-- **Ollama** running somewhere reachable. Local install or remote box, doesn't
-  matter — the server only needs HTTP access to the `/api` endpoint. On a
-  Jetson/Pi/anything with a GPU is ideal, but a workstation works too.
+- **An LLM endpoint**, either:
+  - **Ollama** running somewhere reachable. Local install or remote box,
+    doesn't matter — the server only needs HTTP access to the `/api`
+    endpoint. On a Jetson/Pi/anything with a GPU is ideal.
+  - **Any OpenAI-compatible endpoint**: real OpenAI, OpenRouter, Together,
+    vLLM, llama.cpp server, LM Studio, or Ollama's own `/v1` surface. The
+    server hits `/v1/chat/completions` (and `/v1/models` if available).
 - **Claude Code** installed and authenticated (this is what consumes the MCP).
 
 ### 2. Clone and build
@@ -63,18 +71,43 @@ ollama pull gemma3:latest   # fallback when a tier model errors
 You can swap models in `configs/default.yaml`; whatever's listed under `tiers`
 is what the startup health check verifies.
 
-### 4. Point the server at your Ollama
+### 4. Point the server at your provider(s)
 
-Two options — pick one:
-
-**a. Env var (recommended)** — leave the YAML alone, override at launch:
+`configs/default.yaml` ships with a single Ollama provider. To override its
+URL without editing the file:
 
 ```sh
 export OLLAMA_BASE_URL=http://your-ollama-host:11434
 ```
 
-**b. Edit the config** — change `ollama.base_url` in `configs/default.yaml`.
-Defaults to `http://localhost:11434`.
+To add an OpenAI-compatible provider, uncomment the `openai:` block in the
+config (or add your own). Three env vars patch the matching block at runtime:
+
+```sh
+export OPENAI_BASE_URL=https://api.openai.com/v1   # or vLLM / OpenRouter / etc
+export OPENAI_API_KEY=sk-...                       # leave unset for keyless endpoints
+```
+
+**Per-tier routing.** Each tier can override `default_provider`:
+
+```yaml
+providers:
+  ollama:    { type: ollama, base_url: http://localhost:11434 }
+  openai:    { type: openai, base_url: https://api.openai.com/v1, api_key: "" }
+
+default_provider: ollama
+
+tiers:
+  "1":
+    model: gemma4:e2b           # tier 1 hits ollama (default)
+  "2":
+    provider: openai             # tier 2 routed to OpenAI
+    model: gpt-4o-mini
+```
+
+That's the bonus pattern: a fast local model for the chatty tools (`filter`,
+`extract`) and a heavier cloud model for `fetch`/`summarize` where the
+accuracy matters more than latency or cost-per-call.
 
 ### 5. Verify
 
@@ -83,12 +116,16 @@ client. Press Ctrl-D to exit:
 
 ```sh
 $ OLLAMA_BASE_URL=http://your-host:11434 ./bin/beans-preserver
-2026/05/06 13:25:34 ollama 0.23.0 reachable at http://your-host:11434
-2026/05/06 13:25:35 verified 3 models: [gemma3:latest gemma4:26b gemma4:e2b]
+2026/05/06 13:25:34 provider "ollama" (ollama @ http://your-host:11434): ollama 0.23.0
+2026/05/06 13:25:35 verified 2 models: [ollama/gemma4:26b ollama/gemma4:e2b]
+2026/05/06 13:25:35 verified fallback: ollama/gemma3:latest
 ```
 
-If you see `models not present on ollama: [...]`, the health check is telling
-you to `ollama pull` the missing ones.
+If you see `models not present (...)`, the health check is telling you to
+`ollama pull` the missing ones (or, for OpenAI providers, that the listed
+model isn't available at that endpoint). OpenAI-compat endpoints that don't
+expose `/v1/models` are handled gracefully — the server logs `(no /models
+endpoint)` and skips per-model verification.
 
 ### 6. Wire into Claude Code
 
@@ -151,14 +188,19 @@ the inputs change.
 ```
 cmd/server/        # MCP stdio server (single binary)
 internal/
-  config/          # YAML loader, tier resolution
-  ollama/          # /api/generate client
-  cache/           # bbolt LRU + TTL
+  config/          # YAML loader, provider + tier resolution
+  provider/        # Provider interface
+    ollama/        # native /api/generate (NDJSON streaming)
+    openai/        # /v1/chat/completions (SSE streaming)
+  cache/           # bbolt LRU + TTL + per-tool stats
   prompts/         # tool prompt templates with <<META>> trailer
   fetch/           # HTTP + HTML→text
   tokenize/        # rough char/4 estimator
   tools/           # one .go per tool, all share Runner.generate
-configs/default.yaml
+configs/
+  default.yaml         # single-provider Ollama default
+  smoke-openai.yaml    # OpenAI provider against a local Ollama /v1
+  smoke-mixed.yaml     # tier 1 native + tier 2 openai-compat
 ```
 
 Adding a tool is ~20 lines: input struct, prompt template, a `Runner.X` method,
@@ -178,6 +220,14 @@ one `mcp.AddTool` in `cmd/server/main.go`.
   the file itself. Closes the inline-content double-pay loophole; CLAUDE.md
   pushes Claude to use `path:` whenever the data is on disk. Files capped at
   4 MiB to keep request bodies bounded.
+- **v0.5** — multi-provider: any OpenAI-compatible endpoint (real OpenAI,
+  OpenRouter, vLLM, llama.cpp server, Ollama's `/v1` surface) is now a
+  first-class peer of native Ollama. Each tier can override
+  `default_provider`, so you can route fast tools through a local model and
+  the heavyweight ones through cloud. Cache keys include the provider name
+  to keep results from different endpoints separate. Result shape gains a
+  `provider` field. Health check probes every provider on startup; OpenAI
+  endpoints without `/v1/models` are soft-failed with a warning.
 - **Dropped from roadmap**: PostToolUse hook for Bash compression
   (Claude Code's hook API only allows augmenting context, not replacing tool
   output — a wrapper would *increase* tokens, not save them); LLM-aided
