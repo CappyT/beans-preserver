@@ -93,10 +93,16 @@ you to `ollama pull` the missing ones.
 ### 6. Wire into Claude Code
 
 **Project-scope** — when you `cd` into this repo, Claude Code auto-discovers
-`.mcp.json` and loads the server. The shipped file pins
-`OLLAMA_BASE_URL=http://your-ollama-host:11434`; change that to your host if you
-forked or cloned, or delete the `env` block to fall back to the YAML / your
-shell environment.
+`.mcp.json` and loads the server. The shipped file has no `env` block, so the
+server takes `OLLAMA_BASE_URL` from your shell environment (or falls back to
+the YAML default). Export it once in your shell profile and you're set:
+
+```sh
+export OLLAMA_BASE_URL=http://your-ollama-host:11434
+```
+
+If you'd rather pin the URL to this checkout only, add an `env` block to
+`.mcp.json` — but don't commit it to a shared repo.
 
 **User-scope** — to use the tools in *any* directory:
 
@@ -167,10 +173,11 @@ one `mcp.AddTool` in `cmd/server/main.go`.
   `local_stats` tool with persisted per-tool counters and net-tokens-saved
   separated between server-fetched (real win) and inline-content (no win)
   invocations.
-- **Known limitation surfaced by stats**: inline-content tools (filter, extract,
-  summarize, transform) don't actually save Claude tokens — Claude pays the
-  content as call arg *and* the response. v0.4 candidate: add `path:` parameters
-  so the server can read content itself, turning every tool into a server-fetch.
+- **v0.4** — `local_filter`, `local_extract`, `local_summarize`,
+  `local_transform` accept a `path:` parameter (preferred) so the server reads
+  the file itself. Closes the inline-content double-pay loophole; CLAUDE.md
+  pushes Claude to use `path:` whenever the data is on disk. Files capped at
+  4 MiB to keep request bodies bounded.
 - **Dropped from roadmap**: PostToolUse hook for Bash compression
   (Claude Code's hook API only allows augmenting context, not replacing tool
   output — a wrapper would *increase* tokens, not save them); LLM-aided

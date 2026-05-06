@@ -66,22 +66,22 @@ func main() {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "local_filter",
-		Description: "Filter a block of text via a local LLM, keeping only lines matching a plain-language criterion. Use to compress verbose Bash output, logs, grep results before they enter Claude's context. Returns confidence + raw_token_estimate.",
+		Description: "Filter a file or block of text via a local LLM, keeping only lines matching a plain-language criterion. PREFER passing 'path' over 'content' — the server reads the file itself and you only pay tokens for the filtered result. Use 'content' only when the data isn't a file (e.g. piped Bash output).",
 	}, wrap(runner.Filter))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "local_extract",
-		Description: "Extract a specific section from a long source via a local LLM. Use when you need 'the function that does X' or 'the part about Y' from a file too large to read fully. Outputs 'NOT FOUND' if the source has no answer.",
+		Description: "Extract a specific section from a file or long source via a local LLM. PREFER 'path' over 'source' to save tokens. Use when you need 'the function that does X' or 'the part about Y' from a file too large to read fully. Outputs 'NOT FOUND' if the source has no answer.",
 	}, wrap(runner.Extract))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "local_summarize",
-		Description: "Produce a concise prose summary of long content via a local LLM, with a focus area you specify. Use before deciding whether a file is worth a full read.",
+		Description: "Produce a concise prose summary of a file or long content via a local LLM. PREFER 'path' over 'content' to save tokens. Use before deciding whether a file is worth a full Read.",
 	}, wrap(runner.Summarize))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "local_transform",
-		Description: "Mechanical format transformation via a local LLM (JSON↔YAML, CSV→JSON, etc). No reasoning needed — preserves all data.",
+		Description: "Mechanical format transformation via a local LLM (JSON↔YAML, CSV→JSON, etc). PREFER 'path' over 'input' to save tokens. No reasoning needed — preserves all data.",
 	}, wrap(runner.Transform))
 
 	mcp.AddTool(server, &mcp.Tool{

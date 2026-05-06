@@ -1,7 +1,8 @@
 # beans-preserver — token-saving MCP
 
 Local-LLM MCP server that offloads token-heavy preprocessing (filtering, extraction,
-summarization, web fetch) to a Jetson AGX running Ollama at `your-ollama-host:11434`.
+summarization, web fetch) to an Ollama endpoint (configurable via the
+`OLLAMA_BASE_URL` env var, defaults to `http://localhost:11434`).
 
 ## When to delegate to local tools
 
@@ -52,17 +53,17 @@ Every tool returns:
 
 ## Important: when do these tools actually save tokens?
 
-**Real savings (server-fetched tools):**
-- `local_fetch` — server pulls the URL itself; you only pay for the extracted answer.
-- `local_repo_index` — deterministic walk; output is much smaller than reading every file.
+**Always prefer `path:` over inline content** for `local_filter`, `local_extract`,
+`local_summarize`, `local_transform`. When you pass `path`, the server reads the
+file directly — you only pay for the (small) result. When you pass inline content
+(`content` / `source` / `input`), you pay for the content twice: once in the call
+arg, once in the response. Same goes for `local_fetch` (URL-based by design) and
+`local_repo_index` (no input at all).
 
-**No savings (inline-content tools):** `local_filter`, `local_extract`, `local_summarize`,
-`local_transform` accept content as a call argument. You pay the input tokens for the
-content when calling the tool, then pay again for the response. Use these only when
-either (a) the work doesn't fit your context budget anyway and you'd rather the local
-model deal with it, (b) the cache will be hit by repeated calls on the same content,
-or (c) the user explicitly wants a structured local-LLM view rather than your own
-analysis.
+Inline-content variants are still there for the cases where data isn't a file
+(piped Bash output you've already captured, generated text, a snippet from
+another tool's response). Avoid them otherwise.
 
-Call `local_stats` to see the running totals: `cumulative.net_claude_tokens_saved` is
-the win, `net_claude_tokens_wasted` is the round-trip overhead from inline calls.
+Call `local_stats` to see the running totals: `cumulative.net_claude_tokens_saved`
+is the win, `net_claude_tokens_wasted` is the round-trip overhead from inline calls.
+A healthy ratio means most of your calls are using `path` / URLs.
