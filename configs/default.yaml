@@ -1,0 +1,51 @@
+ollama:
+  base_url: http://your-ollama-host:11434
+  request_timeout: 600s
+
+# Tier → model mapping. Tools pick a tier; cluster tuning lives here.
+tiers:
+  "1":
+    model: gemma4:e2b
+    think: false
+    options:
+      temperature: 0.1
+      num_predict: 1500
+  "2":
+    model: gemma4:26b
+    think: false
+    options:
+      temperature: 0.1
+      num_predict: 2500
+  fallback:
+    model: gemma3:latest
+    options:
+      temperature: 0.1
+      num_predict: 1500
+
+cache:
+  path: ~/.cache/beans-preserver/cache.db
+  max_entries: 5000
+  default_ttl: 0s  # 0s = forever (invalidated by content hash)
+
+tools:
+  filter:
+    tier: "1"
+    cache_ttl: 0s
+  extract:
+    tier: "1"
+    cache_ttl: 0s
+  summarize:
+    tier: "1"
+    cache_ttl: 0s
+  transform:
+    tier: "1"
+    cache_ttl: 0s
+  fetch:
+    tier: "2"        # tier 2 — pages can be large + need accuracy
+    cache_ttl: 86400s  # 24h: web content changes
+
+hook:
+  bash:
+    enabled: false  # disabled until we ship the hook binary
+    threshold_tokens: 8000
+    tier: 1

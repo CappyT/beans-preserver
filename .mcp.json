@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "beans-preserver": {
+      "type": "stdio",
+      "command": "./bin/beans-preserver",
+      "args": ["--config", "configs/default.yaml"]
+    }
+  }
+}
